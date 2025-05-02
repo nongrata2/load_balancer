@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -15,6 +14,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 )
 
 type BackendServer struct {
@@ -27,17 +27,38 @@ type LoadBalancer struct {
 	backends []*BackendServer
 	current  uint64
 	mu       sync.Mutex
+	log      *slog.Logger
 }
 
-func NewLoadBalancer(backends []string) *LoadBalancer {
-
-	lb := &LoadBalancer{}
+func NewLoadBalancer(backends []string, log *slog.Logger) *LoadBalancer {
+	lb := &LoadBalancer{log: log}
 	for _, backendUrl := range backends {
 		parsedUrl, err := url.Parse(backendUrl)
 		if err != nil {
-			log.Fatal("Failed to parse backend URL:", err)
+			lb.log.Error("Failed to parse backend URL:", "error", err)
 		}
+
 		proxy := httputil.NewSingleHostReverseProxy(parsedUrl)
+		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+			lb.mu.Lock()
+			for _, b := range lb.backends {
+				if b.URL == parsedUrl {
+					b.IsAlive = false
+					break
+				}
+			}
+			lb.mu.Unlock()
+			lb.log.Info("Backend is not availiable", "url", parsedUrl)
+
+			if nextBackend := lb.GetNextBackend(); nextBackend != nil {
+				log.Info("Retrying request with next backend", "url", nextBackend.URL)
+				nextBackend.ReverseProxy.ServeHTTP(w, r)
+				return
+			}
+
+			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		}
+
 		lb.backends = append(lb.backends, &BackendServer{
 			URL:          parsedUrl,
 			ReverseProxy: proxy,
@@ -73,8 +94,57 @@ func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Forwarding request to %s", backend.URL)
+	lb.log.Info("Forwarding request:", "url", backend.URL)
 	backend.ReverseProxy.ServeHTTP(w, r)
+}
+
+func (lb *LoadBalancer) CheckBackendHealth(backend *BackendServer) bool {
+	client := http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	resp, err := client.Get(backend.URL.String())
+	if err != nil {
+		lb.log.Debug("Health check failed",
+			"url", backend.URL,
+			"error", err,
+		)
+		return false
+	}
+	defer resp.Body.Close()
+
+	return resp.StatusCode < http.StatusBadRequest
+}
+
+func (lb *LoadBalancer) RunHealthChecks(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			lb.mu.Lock()
+			for _, backend := range lb.backends {
+				wasAlive := backend.IsAlive
+				nowAlive := lb.CheckBackendHealth(backend)
+
+				if wasAlive != nowAlive {
+					backend.IsAlive = nowAlive
+					status := "up"
+					if !nowAlive {
+						status = "down"
+					}
+					lb.log.Info("Backend status changed",
+						"url", backend.URL,
+						"status", status,
+					)
+				}
+			}
+			lb.mu.Unlock()
+		}
+	}
 }
 
 func main() {
@@ -85,7 +155,7 @@ func main() {
 
 	log := mustMakeLogger(cfg.LogLevel)
 
-	lb := NewLoadBalancer(cfg.Backends)
+	lb := NewLoadBalancer(cfg.Backends, log)
 
 	log.Info("Load balancer started on address", "address", cfg.Address)
 
@@ -96,6 +166,8 @@ func main() {
 		syscall.SIGQUIT,
 	)
 	defer stop()
+
+	go lb.RunHealthChecks(ctx, 10*time.Second)
 
 	server := http.Server{
 		Addr:        cfg.Address,
