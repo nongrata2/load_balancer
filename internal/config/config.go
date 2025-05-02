@@ -8,7 +8,8 @@ import (
 
 type Config struct {
 	Backends []string `yaml:"backends"`
-	Port     string   `env:"PORT" env-default:"8080"`
+	Address  string   `env:"ADDRESS" env-default:"localhost:8080"`
+	LogLevel string   `yaml:"log_level" env:"LOG_LEVEL" env-default:"DEBUG"`
 }
 
 func MustLoad(configPath string) Config {

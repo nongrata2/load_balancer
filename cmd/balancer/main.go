@@ -1,13 +1,14 @@
 package main
 
 import (
-	// "fmt"
 	"cloudru/internal/config"
 	"flag"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"sync"
 )
 
@@ -77,10 +78,29 @@ func main() {
 	flag.Parse()
 	cfg := config.MustLoad(configPath)
 
+	log := mustMakeLogger(cfg.LogLevel)
+
 	lb := NewLoadBalancer(cfg.Backends)
 
-	log.Println("Load balancer started on port", cfg.Port)
-	if err := http.ListenAndServe(":"+cfg.Port, lb); err != nil {
-		log.Fatal("Failed to start load balancer:", err)
+	log.Info("Load balancer started on address", "address", cfg.Address)
+
+	if err := http.ListenAndServe(cfg.Address, lb); err != nil {
+		log.Error("Failed to start load balancer:", "error", err)
 	}
+}
+
+func mustMakeLogger(logLevel string) *slog.Logger {
+	var level slog.Level
+	switch logLevel {
+	case "DEBUG":
+		level = slog.LevelDebug
+	case "INFO":
+		level = slog.LevelInfo
+	case "ERROR":
+		level = slog.LevelError
+	default:
+		panic("unknown log level: " + logLevel)
+	}
+	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level, AddSource: true})
+	return slog.New(handler)
 }
