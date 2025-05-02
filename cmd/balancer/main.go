@@ -72,19 +72,23 @@ func (lb *LoadBalancer) GetNextBackend() *BackendServer {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
-	start := lb.current
-	for {
+	var healthyBackend *BackendServer
+
+	for range len(lb.backends) {
 		backend := lb.backends[lb.current%uint64(len(lb.backends))]
 		lb.current++
 
 		if backend.IsAlive {
-			return backend
-		}
-
-		if lb.current == start {
-			return nil
+			healthyBackend = backend
+			break
 		}
 	}
+
+	if healthyBackend == nil {
+		lb.log.Error("No healthy backends available")
+	}
+
+	return healthyBackend
 }
 
 func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
