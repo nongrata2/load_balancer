@@ -2,14 +2,19 @@ package main
 
 import (
 	"cloudru/internal/config"
+	"context"
+	"errors"
 	"flag"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 )
 
 type BackendServer struct {
@@ -84,8 +89,34 @@ func main() {
 
 	log.Info("Load balancer started on address", "address", cfg.Address)
 
-	if err := http.ListenAndServe(cfg.Address, lb); err != nil {
-		log.Error("Failed to start load balancer:", "error", err)
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+		syscall.SIGQUIT,
+	)
+	defer stop()
+
+	server := http.Server{
+		Addr:        cfg.Address,
+		Handler:     lb,
+		BaseContext: func(_ net.Listener) context.Context { return ctx },
+	}
+
+	go func() {
+		<-ctx.Done()
+		log.Debug("shutting down server")
+		if err := server.Shutdown(context.Background()); err != nil {
+			log.Error("erroneous shutdown", "error", err)
+		}
+	}()
+
+	log.Info("Running HTTP server", "address", cfg.Address)
+	if err := server.ListenAndServe(); err != nil {
+		if !errors.Is(err, http.ErrServerClosed) {
+			log.Error("server closed unexpectedly", "error", err)
+			return
+		}
 	}
 }
 
