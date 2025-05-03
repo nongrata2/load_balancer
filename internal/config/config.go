@@ -8,7 +8,7 @@ import (
 
 type Config struct {
 	Backends []string `yaml:"backends"`
-	Address  string   `env:"ADDRESS" env-default:"localhost:8080"`
+	Address  string   `yaml:"address" env:"ADDRESS" env-default:"localhost:8080"`
 	LogLevel string   `yaml:"log_level" env:"LOG_LEVEL" env-default:"DEBUG"`
 }
 

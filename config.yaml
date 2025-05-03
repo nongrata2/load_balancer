@@ -1,4 +1,4 @@
-port: 8080
+address: localhost:8080
 backends:
   - "http://localhost:8081"
   - "http://localhost:8082"
