@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"log/slog"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -21,17 +22,67 @@ type BackendServer struct {
 	URL          *url.URL
 	ReverseProxy *httputil.ReverseProxy
 	IsAlive      bool
+	mu           sync.Mutex
+	activeConns  int
+}
+
+func (b *BackendServer) IncrementConn() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.activeConns++
+}
+
+func (b *BackendServer) DecrementConn() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.activeConns--
+}
+
+func (b *BackendServer) GetActiveConns() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.activeConns
+}
+
+type BalancingAlgorithm int
+
+const (
+	RoundRobin BalancingAlgorithm = iota
+	LeastConnections
+	Random
+)
+
+func (a BalancingAlgorithm) String() string {
+	switch a {
+	case RoundRobin:
+		return "RoundRobin"
+	case LeastConnections:
+		return "LeastConnections"
+	case Random:
+		return "Random"
+	default:
+		return "Unknown"
+	}
 }
 
 type LoadBalancer struct {
-	backends []*BackendServer
-	current  uint64
-	mu       sync.Mutex
-	log      *slog.Logger
+	backends  []*BackendServer
+	current   uint64
+	mu        sync.Mutex
+	log       *slog.Logger
+	algorithm BalancingAlgorithm
 }
 
-func NewLoadBalancer(backends []string, log *slog.Logger) *LoadBalancer {
-	lb := &LoadBalancer{log: log}
+func NewLoadBalancer(backends []string, log *slog.Logger, algorithmstr string) *LoadBalancer {
+	var algorithm BalancingAlgorithm
+	if algorithmstr == "random" {
+		algorithm = Random
+	} else if algorithmstr == "leastconnections" {
+		algorithm = LeastConnections
+	} else {
+		algorithm = RoundRobin
+	}
+	lb := &LoadBalancer{log: log, algorithm: algorithm}
 	for _, backendUrl := range backends {
 		parsedUrl, err := url.Parse(backendUrl)
 		if err != nil {
@@ -72,23 +123,77 @@ func (lb *LoadBalancer) GetNextBackend() *BackendServer {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
-	var healthyBackend *BackendServer
+	switch lb.algorithm {
+	case LeastConnections:
+		return lb.getLeastBusyBackend()
+	case Random:
+		return lb.getRandomBackend()
+	default:
+		return lb.getRoundRobinBackend()
+	}
+}
 
-	for range len(lb.backends) {
+// least busy algorithm
+func (lb *LoadBalancer) getLeastBusyBackend() *BackendServer {
+	var leastBusy *BackendServer
+	minConns := int(^uint(0) >> 1)
+
+	for _, backend := range lb.backends {
+		if !backend.IsAlive {
+			continue
+		}
+
+		conns := backend.GetActiveConns()
+		if conns < minConns {
+			leastBusy = backend
+			minConns = conns
+		}
+	}
+
+	if leastBusy == nil {
+		lb.log.Error("No healthy backends available")
+		return nil
+	}
+
+	return leastBusy
+}
+
+// random algorithm
+func (lb *LoadBalancer) getRandomBackend() *BackendServer {
+	var available []*BackendServer
+	for _, backend := range lb.backends {
+		if backend.IsAlive {
+			available = append(available, backend)
+		}
+	}
+
+	if len(available) == 0 {
+		lb.log.Error("No healthy backends available")
+		return nil
+	}
+
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	return available[rng.Intn(len(available))]
+}
+
+// round robin algorithm
+func (lb *LoadBalancer) getRoundRobinBackend() *BackendServer {
+	start := lb.current
+	for {
 		backend := lb.backends[lb.current%uint64(len(lb.backends))]
 		lb.current++
 
 		if backend.IsAlive {
-			healthyBackend = backend
+			return backend
+		}
+
+		if lb.current == start {
 			break
 		}
 	}
 
-	if healthyBackend == nil {
-		lb.log.Error("No healthy backends available")
-	}
-
-	return healthyBackend
+	lb.log.Error("No healthy backends available")
+	return nil
 }
 
 func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -98,7 +203,15 @@ func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lb.log.Info("Forwarding request:", "url", backend.URL)
+	backend.IncrementConn()
+	defer backend.DecrementConn()
+
+	lb.log.Info("Forwarding request",
+		"url", backend.URL,
+		"algorithm", lb.algorithm.String(),
+		"active_conns", backend.GetActiveConns(),
+	)
+
 	backend.ReverseProxy.ServeHTTP(w, r)
 }
 
@@ -159,7 +272,7 @@ func main() {
 
 	log := mustMakeLogger(cfg.LogLevel)
 
-	lb := NewLoadBalancer(cfg.Backends, log)
+	lb := NewLoadBalancer(cfg.Backends, log, cfg.Algorithm)
 
 	log.Info("Load balancer started on address", "address", cfg.Address)
 

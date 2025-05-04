@@ -7,9 +7,10 @@ import (
 )
 
 type Config struct {
-	Backends []string `yaml:"backends"`
-	Address  string   `yaml:"address" env:"ADDRESS" env-default:"localhost:8080"`
-	LogLevel string   `yaml:"log_level" env:"LOG_LEVEL" env-default:"DEBUG"`
+	Backends  []string `yaml:"backends"`
+	Address   string   `yaml:"address" env:"ADDRESS" env-default:"localhost:8080"`
+	LogLevel  string   `yaml:"log_level" env:"LOG_LEVEL" env-default:"DEBUG"`
+	Algorithm string   `yaml:"algorithm" env:"ALGORITHM" env-default:"roundrobin"`
 }
 
 func MustLoad(configPath string) Config {
