@@ -133,16 +133,23 @@ func (lb *LoadBalancer) getRandomBackend() *backend.BackendServer {
 
 // round robin algorithm
 func (lb *LoadBalancer) getRoundRobinBackend() *backend.BackendServer {
+	if len(lb.backends) == 0 {
+		lb.log.Error("No backends configured")
+		return nil
+	}
+
 	start := lb.current
 	for {
-		backend := lb.backends[lb.current%uint64(len(lb.backends))]
-		lb.current++
+		idx := lb.current % uint64(len(lb.backends))
+		backend := lb.backends[idx]
 
 		if backend.IsAlive {
+			lb.current++
 			return backend
 		}
 
-		if lb.current == start {
+		lb.current++
+		if lb.current-start >= uint64(len(lb.backends)) {
 			break
 		}
 	}
@@ -155,9 +162,7 @@ func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	backend := lb.GetNextBackend()
 	if backend == nil {
 		lb.log.Error("No available backends")
-		w.Header().Set("Content-Type", "text/plain")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte("No healthy backends available\n"))
+		http.Error(w, "All backends are down", http.StatusServiceUnavailable)
 		return
 	}
 
