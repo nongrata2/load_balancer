@@ -10,6 +10,16 @@ A high-performance HTTP load balancer implemented in Go that distributes incomin
 - Automatically skips unavailable servers during distribution
 - Ensures equal request distribution among healthy backends
 
+### ⚖️ Least Connections Algorithm
+- Selects the backend server with the fewest active connections
+- Provides better performance under long-lived or unevenly distributed workloads
+- Tracks connection count in real-time per backend
+
+### 🎲 Random Algorithm
+- Chooses a random healthy backend for each request
+- Uses a cryptographically secure random source for fair distribution
+- Scales well with large numbers of backends
+
 ### 🩺 Health Monitoring System
 - **Interval**: Active health checks every **10 seconds**
 - **Check Method**: Sends HTTP GET requests to backend root URLs
