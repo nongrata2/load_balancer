@@ -25,13 +25,14 @@ A high-performance HTTP load balancer implemented in Go that distributes incomin
 git clone https://github.com/nongrata2/load_balancer
 cd load_balancer
 ```
-2. Create and fill config.yaml file. Spicify address for load balancer and address of all backend servers. For example:
+2. Create and fill config.yaml file. Spicify address for load balancer, address of all backend servers and algorthm(random, roundrobin or leastconnections). For example:
 ```
 address: localhost:8080
 backends:
   - "http://localhost:8081"
   - "http://localhost:8082"
   - "http://localhost:8083"
+algorithm: "roundrobin"
 ```
 3. Run the load balancer:
 ```sh

@@ -83,6 +83,7 @@ func NewLoadBalancer(backends []string, log *slog.Logger, algorithmstr string) *
 		algorithm = RoundRobin
 	}
 	lb := &LoadBalancer{log: log, algorithm: algorithm}
+	lb.log.Info("Using load balancer with", "algorithm", algorithmstr)
 	for _, backendUrl := range backends {
 		parsedUrl, err := url.Parse(backendUrl)
 		if err != nil {
